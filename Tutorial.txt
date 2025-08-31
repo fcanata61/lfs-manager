@@ -1,0 +1,170 @@
+==============================================
+ LFS-MANAGER - Manual Completo
+==============================================
+
+Gerenciador de pacotes e builds para Linux From Scratch
+com suporte a compilação via receitas JSON, hooks,
+binários (.tar.xz), banco de pacotes e ambientes
+isolados (stable / unstable).
+
+----------------------------------------------
+1. Instalação
+----------------------------------------------
+1. Clonar ou copiar o arquivo lfs-manager.py
+   para /usr/local/bin:
+   $ sudo install -m 755 lfs-manager.py /usr/local/bin/lfs-manager
+
+2. Criar diretórios padrões:
+   $ sudo mkdir -p /repo /build /pkgs /var/lib/lfs-manager /mnt/lfs-stable /mnt/lfs-unstable
+   $ sudo chown -R $USER /repo /build /pkgs /var/lib/lfs-manager /mnt/lfs-*
+
+3. Requisitos:
+   - Python 3.x
+   - fakeroot
+   - curl, git, tar, xz
+   - make, gcc, binutils (mínimos do host)
+
+----------------------------------------------
+2. Estrutura de Diretórios
+----------------------------------------------
+/repo/<categoria>/<nome-versao>/recipe.json   -> receitas dos pacotes
+/build/<env>/<nome-versao>/                   -> diretório de build
+/build/<env>/<nome-versao>/pkgroot/           -> instalação fake (DESTDIR)
+/pkgs/<env>/<nome-versao>.tar.xz              -> pacotes binários
+/var/lib/lfs-manager/<env>/installed.json     -> banco de pacotes instalados
+/mnt/lfs-<env>/                               -> rootfs dos ambientes
+
+Categorias comuns:
+/repo/base     -> pacotes fundamentais (gcc, glibc, binutils)
+/repo/x11      -> pacotes gráficos X11
+/repo/extras   -> libs extras
+/repo/desktop  -> ambiente gráfico completo
+
+----------------------------------------------
+3. Variáveis Disponíveis nos Hooks
+----------------------------------------------
+$SRC_DIR    -> diretório com fontes baixados
+$BUILD_DIR  -> diretório de build do pacote
+$PREFIX     -> /usr (padrão)
+$ROOTFS     -> rootfs do ambiente (/mnt/lfs-stable ou /mnt/lfs-unstable)
+$PKGROOT    -> diretório fake DESTDIR usado pelo fakeroot
+$PKGS       -> diretório de pacotes binários
+$PKG_NAME   -> nome do pacote
+$PKG_VERSION-> versão do pacote
+$REPO       -> raiz das receitas (/repo)
+
+----------------------------------------------
+4. Comandos do lfs-manager
+----------------------------------------------
+
+# Criar novo ambiente
+lfs-manager create <env>
+ex: lfs-manager create unstable
+
+# Entrar em chroot (simulado)
+lfs-manager chroot <env>
+
+# Compilar pacote (sem gerar binário)
+lfs-manager build <env> <pkg>
+ex: lfs-manager build unstable gcc
+
+# Compilar e gerar binário .tar.xz
+lfs-manager pkgbuild <env> <pkg>
+ex: lfs-manager pkgbuild unstable glibc
+
+# Instalar pacote binário
+lfs-manager pkginstall <env> <pkg-versao>
+ex: lfs-manager pkginstall unstable glibc-2.39
+
+# Remover pacote binário
+lfs-manager pkgrm <env> <pkg-versao>
+ex: lfs-manager pkgrm unstable glibc-2.39
+
+# Listar pacotes instalados
+lfs-manager list-installed <env>
+
+----------------------------------------------
+5. Fluxo de Trabalho
+----------------------------------------------
+
+1. Criar ambiente:
+   $ lfs-manager create unstable
+
+2. Colocar receita em /repo/base/...
+   Exemplo: /repo/base/glibc-2.39/recipe.json
+
+3. Compilar e gerar binário:
+   $ lfs-manager pkgbuild unstable glibc
+
+4. Instalar no rootfs:
+   $ lfs-manager pkginstall unstable glibc-2.39
+
+5. Verificar pacotes:
+   $ lfs-manager list-installed unstable
+
+6. Remover:
+   $ lfs-manager pkgrm unstable glibc-2.39
+
+----------------------------------------------
+6. Receita Real - Glibc
+----------------------------------------------
+Arquivo: /repo/base/glibc-2.39/recipe.json
+
+{
+  "name": "glibc",
+  "version": "2.39",
+  "category": "base",
+  "url": "https://ftp.gnu.org/gnu/libc/glibc-2.39.tar.xz",
+  "sha256": "6c544ab65f2dd6c1a963da5df1a313236dfe7b7040fbb8f9a35f812d258b95f8",
+  "depends": ["binutils", "gcc"],
+  "hooks": {
+    "preconfig": "mkdir -p build && cd build && ../configure --prefix=/usr --disable-werror --enable-kernel=4.14 --enable-stack-protector=strong --with-headers=$ROOTFS/usr/include",
+    "build": "cd build && make -j$(nproc)",
+    "preinstall": "cd build && make check -k || true",
+    "install": "cd build && make install DESTDIR=$PKGROOT",
+    "postinstall": "echo 'glibc $PKG_VERSION instalado com sucesso em $ROOTFS'",
+    "postremove": "echo 'glibc $PKG_VERSION removido de $ROOTFS'"
+  }
+}
+
+----------------------------------------------
+7. Receita Exemplo Completa (full)
+----------------------------------------------
+Arquivo: /repo/extras/exemplo-1.0/recipe.json
+
+{
+  "name": "exemplo",
+  "version": "1.0",
+  "category": "extras",
+  "url": "https://exemplo.org/src/exemplo-1.0.tar.xz",
+  "sha256": "deadbeef...",
+  "extra_sources": [
+    {
+      "url": "https://exemplo.org/patches/exemplo-fix.patch",
+      "sha256": "cafebabe..."
+    }
+  ],
+  "depends": ["gcc", "make", "zlib"],
+  "hooks": {
+    "preconfig": "patch -p1 < $SRC_DIR/exemplo-fix.patch && ./configure --prefix=/usr --sysconfdir=/etc --disable-static",
+    "prepare": "autoreconf -fi",
+    "build": "make -j$(nproc)",
+    "preinstall": "make check || true",
+    "install": "make install DESTDIR=$PKGROOT",
+    "postinstall": "update-desktop-database || true && echo 'Pacote exemplo instalado!'",
+    "postremove": "echo 'Pacote exemplo removido!'"
+  }
+}
+
+----------------------------------------------
+8. Dicas
+----------------------------------------------
+- Sempre use "pkgbuild" para gerar binários reusáveis.
+- Guarde os pacotes em /pkgs/<env> para reinstalar rápido.
+- Use ambientes separados (stable/unstable) para testar
+  versões novas de toolchain.
+- Se quiser snapshots, basta tar.gz do /mnt/lfs-<env>.
+
+==============================================
+Fim do Manual
+==============================================
